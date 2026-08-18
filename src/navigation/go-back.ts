@@ -13,3 +13,23 @@ export function goBackOrHome(router: BackRouter) {
 
   router.replace('/');
 }
+
+type CompletionToggleSuccessOptions = {
+  wasCompleted: boolean;
+  router: BackRouter;
+  reloadPlan: () => Promise<void> | void;
+};
+
+/** 标记完成后返回来源列表；取消完成后留在详情页刷新状态。 */
+export async function handleCompletionToggleSuccess({
+  wasCompleted,
+  router,
+  reloadPlan,
+}: CompletionToggleSuccessOptions) {
+  if (wasCompleted) {
+    await reloadPlan();
+    return;
+  }
+
+  goBackOrHome(router);
+}

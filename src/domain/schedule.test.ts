@@ -1,21 +1,58 @@
 import { describe, expect, it } from 'vitest';
 
-import { getPlanDateLabel, getPlanDateTimeLabel, getScheduleDateLabel, scheduleDays } from './schedule';
+import {
+  createMonthCalendarDays,
+  createScheduleDays,
+  getScheduleDateScrollOffset,
+  getLocalDateKey,
+  getMonthKey,
+  getPlanDateLabel,
+  getPlanDateTimeLabel,
+  getScheduleDateLabel,
+  shiftDateKey,
+  shiftMonthKey,
+} from './schedule';
 
-describe('schedule date labels', () => {
-  it('keeps the schedule header aligned with the visible date strip', () => {
-    expect(scheduleDays).toEqual([
-      { day: 14, weekday: '周四' },
-      { day: 15, weekday: '周五' },
-      { day: 16, weekday: '周六' },
-      { day: 17, weekday: '周日' },
-      { day: 18, weekday: '周一' },
-      { day: 19, weekday: '周二' },
-      { day: 20, weekday: '周三' },
-    ]);
+describe('dynamic schedule dates', () => {
+  it('uses the local calendar date as the initial date and month', () => {
+    const todayKey = getLocalDateKey(new Date(2026, 7, 18, 23, 30));
 
-    expect(getScheduleDateLabel(15)).toBe('2026年8月15日 周五');
-    expect(getScheduleDateLabel(16)).toBe('2026年8月16日 周六');
+    expect(todayKey).toBe('2026-08-18');
+    expect(getMonthKey(todayKey)).toBe('2026-08');
+    expect(getScheduleDateLabel(todayKey)).toBe('2026年8月18日 周二');
+  });
+
+  it('builds every date in the selected month', () => {
+    const days = createScheduleDays('2026-08-18');
+
+    expect(days).toHaveLength(31);
+    expect(days[0]).toEqual({ dateKey: '2026-08-01', day: 1, weekday: '周六' });
+    expect(days[30]).toEqual({ dateKey: '2026-08-31', day: 31, weekday: '周一' });
+  });
+
+  it('uses the real number of days for leap-year February', () => {
+    expect(createScheduleDays('2028-02-10')).toHaveLength(29);
+    expect(createScheduleDays('2027-02-10')).toHaveLength(28);
+  });
+
+  it('centers the selected day when the month strip is wider than the viewport', () => {
+    expect(getScheduleDateScrollOffset('2026-08-01', 430)).toBe(0);
+    expect(getScheduleDateScrollOffset('2026-08-18', 430)).toBe(706);
+  });
+
+  it('moves dates and months across year boundaries', () => {
+    expect(shiftDateKey('2026-12-31', 1)).toBe('2027-01-01');
+    expect(shiftDateKey('2027-01-01', -1)).toBe('2026-12-31');
+    expect(shiftMonthKey('2026-12', 1)).toBe('2027-01');
+  });
+
+  it('builds a six-week Monday-first calendar including adjacent month days', () => {
+    const days = createMonthCalendarDays('2026-08');
+
+    expect(days).toHaveLength(42);
+    expect(days[0]).toEqual({ dateKey: '2026-07-27', day: 27, isCurrentMonth: false });
+    expect(days[5]).toEqual({ dateKey: '2026-08-01', day: 1, isCurrentMonth: true });
+    expect(days[41]).toEqual({ dateKey: '2026-09-06', day: 6, isCurrentMonth: false });
   });
 });
 

@@ -678,6 +678,22 @@ describe('createPlanRepository', () => {
     expect(String(calls[0][0])).not.toMatch(/ORDER BY[^;]*\\btime\\b/);
   });
 
+  it('returns distinct non-archived plan dates for calendar markers', async () => {
+    const calls: unknown[][] = [];
+    const db = mockDb(calls);
+    db.getAllAsync = async <T,>(...args: unknown[]) => {
+      calls.push(args);
+      return [{ date_key: '2026-08-18' }, { date_key: '2026-08-20' }] as T[];
+    };
+
+    await expect(createPlanRepository(db).getPlanDateKeysForMonth('2026-08'))
+      .resolves.toEqual(['2026-08-18', '2026-08-20']);
+
+    expect(String(calls[0][0])).toContain('SELECT DISTINCT date_key');
+    expect(String(calls[0][0])).toContain("status != 'archived'");
+    expect(calls[0][1]).toBe('2026-08-%');
+  });
+
   it('reads the stage subtree before rejecting a persisted invalid single', async () => {
     const calls: unknown[][] = [];
     let queryIndex = 0;

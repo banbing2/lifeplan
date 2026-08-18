@@ -15,7 +15,7 @@ import {
   type DetailTab,
 } from '@/components/plans/plan-detail';
 import type { Plan } from '@/domain/models';
-import { goBackOrHome } from '@/navigation/go-back';
+import { goBackOrHome, handleCompletionToggleSuccess } from '@/navigation/go-back';
 import { createPlanRepository } from '@/repositories/plan-repository';
 import { spacing } from '@/theme/tokens';
 
@@ -64,12 +64,13 @@ export default function PlanDetailScreen() {
     }
   };
 
-  /** 切换计划完成状态并刷新详情。 */
+  /** 标记完成后返回来源列表；取消完成后刷新当前详情。 */
   const toggleCompleted = async () => {
     if (!plan) return;
     try {
+      const wasCompleted = plan.status === 'completed';
       await repository.toggleCompleted(plan.id);
-      await loadPlan();
+      await handleCompletionToggleSuccess({ wasCompleted, router, reloadPlan: loadPlan });
     } catch (reason) {
       Alert.alert('操作失败', reason instanceof Error ? reason.message : '请稍后重试');
     }

@@ -4,7 +4,6 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
-import { seedPlans } from '../../db/seed-data';
 import type { Plan } from '../../domain/models';
 import {
   DetailActionBar,
@@ -133,7 +132,7 @@ const zeroExpenseSinglePlan: Plan = {
 
 describe('plan list presentation', () => {
   it('counts every rendered monthly plan including an empty journey draft', () => {
-    expect(getVisiblePlanCount([...seedPlans, emptyJourneyPlan])).toBe(seedPlans.length + 1);
+    expect(getVisiblePlanCount([singlePlan, journeyPlan, emptyJourneyPlan])).toBe(3);
   });
 
   it('shows a single plan time and its direct expense total without a journey summary', () => {

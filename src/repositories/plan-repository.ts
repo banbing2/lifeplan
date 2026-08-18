@@ -350,6 +350,18 @@ export function createPlanRepository(db: QueryDatabase, capabilities: PlanReposi
     getPlansForDate(dateKey: string) {
       return readPlans(`status != 'archived' AND date_key = ?`, dateKey);
     },
+    /** 查询指定月份内存在非归档计划的日期，用于月历圆点标识。 */
+    getPlanDateKeysForMonth(monthKey: string) {
+      return serializeDatabase(db, async () => {
+        const rows = await db.getAllAsync<{ date_key: string }>(
+          `SELECT DISTINCT date_key FROM plans
+           WHERE status != 'archived' AND date_key LIKE ?
+           ORDER BY date_key`,
+          `${monthKey}-%`,
+        );
+        return rows.map((row) => row.date_key);
+      });
+    },
     /** 按 ID 读取一个完整计划聚合，不存在时返回 null。 */
     async getPlan(planId: string) {
       const plans = await readPlans('id = ?', planId);

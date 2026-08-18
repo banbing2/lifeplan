@@ -23,12 +23,12 @@ declare const process: {
 const { DatabaseSync } = process.getBuiltinModule('node:sqlite');
 
 describe('migrateDatabase', () => {
-  it('upgrades v3 to v4 without repeating the plans table alteration', async () => {
+  it('upgrades v3 to v5 without repeating the plans table alteration', async () => {
     const db = createV3Database();
 
     await migrateDatabase(db);
 
-    expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(4);
+    expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(5);
     expect(db.events.some((source) => source.includes('ADD COLUMN structure_kind'))).toBe(false);
     expect(db.row('SELECT color_mode, color_scheme, font_size, font_weight FROM app_settings WHERE id = 1')).toEqual({
       color_mode: 'system',
@@ -38,14 +38,14 @@ describe('migrateDatabase', () => {
     });
   });
 
-  it('upgrades a v2 database in one transaction and publishes version 4 last', async () => {
+  it('upgrades a v2 database in one transaction and publishes version 5 last', async () => {
     const db = createV2Database();
 
     await migrateDatabase(db);
 
     expect(db.transactions).toBe(1);
-    expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(4);
-    expect(db.events.at(-1)).toContain('PRAGMA user_version = 4');
+    expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(5);
+    expect(db.events.at(-1)).toContain('PRAGMA user_version = 5');
     expect(db.columns('plans')).toContain('structure_kind');
     expect(db.execSources.join('\n').replace(/\s+/g, ' ')).toContain(
       "structure_kind TEXT NOT NULL DEFAULT 'single' CHECK (structure_kind IN ('single', 'journey'))",
@@ -134,7 +134,7 @@ describe('migrateDatabase', () => {
 
     expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(2);
     expect(db.columns('plans')).not.toContain('structure_kind');
-    expect(db.execSources.some((source) => source.includes('PRAGMA user_version = 4'))).toBe(false);
+    expect(db.execSources.some((source) => source.includes('PRAGMA user_version = 5'))).toBe(false);
   });
 
   it('can retry successfully after a validation failure is repaired', async () => {
@@ -150,7 +150,7 @@ describe('migrateDatabase', () => {
     await migrateDatabase(db);
 
     expect(db.transactions).toBe(2);
-    expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(4);
+    expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(5);
     expect(db.value<string>(
       "SELECT structure_kind FROM plans WHERE id = 'journey-copy'",
       'structure_kind',
@@ -212,7 +212,7 @@ describe('migrateDatabase', () => {
 
     await migrateDatabase(db);
 
-    expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(4);
+    expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(5);
     expect(db.value<string>("SELECT structure_kind FROM plans WHERE id = 'legacy-plan'", 'structure_kind')).toBe('journey');
     expect(db.row("SELECT kind, start_time, selected_variant_id FROM journey_stages WHERE plan_id = 'legacy-plan'")).toEqual({
       kind: 'choice', start_time: '07:45', selected_variant_id: 'legacy-option',
@@ -226,32 +226,27 @@ describe('migrateDatabase', () => {
     });
   });
 
-  it('rolls back every v1-v4 schema change when empty-database seeding fails', async () => {
-    const db = new TestDatabase();
-    db.failRunContaining = 'INSERT INTO plans';
+  it('upgrades v4 to v5 by removing known demo plan trees and preserving user plans', async () => {
+    const db = createV4Database();
 
-    await expect(migrateDatabase(db)).rejects.toThrow('测试注入写入失败');
+    await migrateDatabase(db);
 
-    expect(db.transactions).toBe(1);
-    expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(0);
-    expect(db.value<number>(
-      "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table'",
-      'count',
-    )).toBe(0);
+    expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(5);
+    expect(db.value<number>("SELECT COUNT(*) AS count FROM plans WHERE id = 'weekend-trip'", 'count')).toBe(0);
+    expect(db.value<number>("SELECT COUNT(*) AS count FROM journey_stages WHERE id = 'weekend-trip-stage'", 'count')).toBe(0);
+    expect(db.value<number>("SELECT COUNT(*) AS count FROM plans WHERE id = 'single-plan'", 'count')).toBe(1);
   });
 
-  it('initializes an empty database as v4 and adds structure_kind before inserting seeds', async () => {
+  it('initializes an empty database as v5 without inserting demo plans', async () => {
     const db = new TestDatabase();
 
     await migrateDatabase(db);
 
     const addColumnIndex = db.events.findIndex((source) => source.includes('ADD COLUMN structure_kind'));
-    const seedInsertIndex = db.events.findIndex((source) => source.includes('INSERT INTO plans'));
     expect(addColumnIndex).toBeGreaterThanOrEqual(0);
-    expect(seedInsertIndex).toBeGreaterThan(addColumnIndex);
-    expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(4);
-    expect(db.value<number>("SELECT COUNT(*) AS count FROM plans WHERE structure_kind = 'journey' AND time IS NULL AND is_all_day = 0", 'count')).toBe(9);
-    expect(db.value<string>("SELECT start_time FROM journey_stages WHERE plan_id = 'weekend-trip'", 'start_time')).toBe('08:30');
+    expect(db.events.some((source) => source.includes('INSERT INTO plans'))).toBe(false);
+    expect(db.value<number>('PRAGMA user_version', 'user_version')).toBe(5);
+    expect(db.value<number>('SELECT COUNT(*) AS count FROM plans', 'count')).toBe(0);
   });
 });
 
@@ -361,6 +356,35 @@ function createV3Database() {
     ALTER TABLE plans ADD COLUMN structure_kind TEXT NOT NULL DEFAULT 'single'
       CHECK (structure_kind IN ('single', 'journey'));
     PRAGMA user_version = 3;
+  `);
+  return db;
+}
+
+function createV4Database() {
+  const db = createV3Database();
+  db.sqlite.exec(`
+    CREATE TABLE app_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      color_mode TEXT NOT NULL CHECK (color_mode IN ('system', 'light', 'dark')),
+      color_scheme TEXT NOT NULL CHECK (color_scheme IN ('green', 'blue', 'coral', 'neutral')),
+      font_size TEXT NOT NULL CHECK (font_size IN ('small', 'standard', 'large')),
+      font_weight TEXT NOT NULL CHECK (font_weight IN ('standard', 'bold')),
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO app_settings (
+      id, color_mode, color_scheme, font_size, font_weight, updated_at
+    ) VALUES (1, 'system', 'green', 'standard', 'standard', CURRENT_TIMESTAMP);
+    INSERT INTO plans (
+      id, title, notes, date_key, time, is_all_day, status, completed_at,
+      selected_option_id, is_featured, accent, icon, created_at, updated_at, structure_kind
+    ) VALUES (
+      'weekend-trip', '用户修改过的演示计划', '', '2026-08-16', NULL, 0, 'pending', NULL,
+      NULL, 1, 'green', 'image', 1, 1, 'journey'
+    );
+    INSERT INTO journey_stages (
+      id, plan_id, kind, name, notes, start_time, selected_variant_id, sort_order, created_at, updated_at
+    ) VALUES ('weekend-trip-stage', 'weekend-trip', 'fixed', '演示阶段', '', '08:30', NULL, 0, 1, 1);
+    PRAGMA user_version = 4;
   `);
   return db;
 }

@@ -1,8 +1,18 @@
-import type { Plan } from '../domain/models';
-import { seedPlans } from './seed-data';
-
 /** 当前 SQLite 结构版本，只有迁移和校验全部成功后才会更新。 */
-const DATABASE_VERSION = 4;
+const DATABASE_VERSION = 5;
+
+/** v1-v4 曾写入的演示计划 ID；v5 会连同其级联子树一次性清理。 */
+const DEMO_PLAN_IDS = [
+  'weekend-trip',
+  'friends-dinner',
+  'shopping-plan',
+  'huizhou-trip',
+  'movie-night',
+  'birthday-gift',
+  'lunch-plan',
+  'scenic-plan',
+  'dinner-plan',
+] as const;
 
 /** 数据库迁移所需的最小 Expo SQLite 接口。 */
 type MigrationDatabase = {
@@ -37,13 +47,19 @@ export async function migrateDatabase(db: MigrationDatabase) {
       // 先补显式结构列再写 v3 种子，避免默认 single 暂存行程计划。
       await createVersion3Schema(db);
       await snapshotVersion2Data(db);
-      if (isFreshDatabase) await insertSeedPlans(db);
-      else await migrateVersion2Data(db);
+      if (!isFreshDatabase) await migrateVersion2Data(db);
       await validateVersion3Data(db);
     }
     if (currentVersion < 4) await createVersion4Schema(db);
+    if (currentVersion < 5) await removeDemoPlans(db);
     await db.execAsync(`PRAGMA user_version = ${DATABASE_VERSION}`);
   });
+}
+
+/** 删除历史演示计划；外键级联负责清理阶段、方案和费用。 */
+async function removeDemoPlans(db: MigrationDatabase) {
+  const placeholders = DEMO_PLAN_IDS.map(() => '?').join(', ');
+  await db.runAsync(`DELETE FROM plans WHERE id IN (${placeholders})`, ...DEMO_PLAN_IDS);
 }
 
 /** 创建只保存一份全局外观偏好的 v4 设置表。 */
@@ -401,66 +417,4 @@ async function migrateLegacyData(db: MigrationDatabase) {
       ))
   `);
   if ((mismatch?.count ?? 0) !== 0) throw new Error('旧计划数据迁移校验失败');
-}
-
-/** 全新安装直接写入阶段化种子，不再先生成旧方案数据。 */
-async function insertSeedPlans(db: MigrationDatabase) {
-  const now = Date.now();
-  for (const plan of seedPlans) {
-    await db.runAsync(
-      `INSERT INTO plans (
-        id, structure_kind, title, notes, date_key, time, is_all_day, status, completed_at,
-        selected_option_id, is_featured, accent, icon, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
-      plan.id, plan.structureKind, plan.title, plan.notes, plan.dateKey, plan.time, plan.isAllDay ? 1 : 0, plan.status,
-      plan.completedAt, plan.isFeatured ? 1 : 0, plan.accent, plan.icon, now, now,
-    );
-    await insertStageTree(db, plan, now);
-  }
-}
-
-/** 按外键依赖顺序写入计划的完整阶段子树。 */
-async function insertStageTree(db: MigrationDatabase, plan: Plan, now: number) {
-  for (const stage of plan.stages) {
-    await db.runAsync(
-      `INSERT INTO journey_stages (
-        id, plan_id, kind, name, notes, start_time, selected_variant_id, sort_order, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
-      stage.id, plan.id, stage.kind, stage.name, stage.notes, stage.startTime, stage.sortOrder, now, now,
-    );
-    if (stage.kind === 'fixed') {
-      for (const expense of stage.expenses) {
-        await db.runAsync(
-          `INSERT INTO stage_expenses (
-            id, stage_id, name, category, amount_cents, sort_order, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          expense.id, stage.id, expense.name, expense.category, expense.amountCents, expense.sortOrder, now, now,
-        );
-      }
-      continue;
-    }
-    for (const variant of stage.variants) {
-      await db.runAsync(
-        `INSERT INTO stage_variants (id, stage_id, name, notes, sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        variant.id, stage.id, variant.name, variant.notes, variant.sortOrder, now, now,
-      );
-      for (const expense of variant.expenses) {
-        await db.runAsync(
-          `INSERT INTO variant_expenses (
-            id, variant_id, name, category, amount_cents, sort_order, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          expense.id, variant.id, expense.name, expense.category, expense.amountCents, expense.sortOrder, now, now,
-        );
-      }
-    }
-    // 方案全部存在后再设置选择，并通过 SQL 再次验证方案确实属于当前阶段。
-    if (stage.selectedVariantId) {
-      await db.runAsync(
-        `UPDATE journey_stages SET selected_variant_id = ?, updated_at = ?
-         WHERE id = ? AND EXISTS (SELECT 1 FROM stage_variants WHERE id = ? AND stage_id = ?)`,
-        stage.selectedVariantId, now, stage.id, stage.selectedVariantId, stage.id,
-      );
-    }
-  }
 }
